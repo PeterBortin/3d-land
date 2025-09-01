@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>3D Ландшафт</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #222; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <!-- Подключаем Three.js и загрузчики -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/examples/js/loaders/OBJLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    // Сцена
+    const scene = new THREE.Scene();
+
+    // Камера
+    const camera = new THREE.PerspectiveCamera(
+      60, window.innerWidth / window.innerHeight, 0.1, 1000
+    );
+    camera.position.set(0, 20, 50);
+
+    // Рендерер
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Свет
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    light.position.set(10, 20, 10);
+    scene.add(light);
+
+    // Контролы для вращения
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+    // Загрузка OBJ
+    const loader = new THREE.OBJLoader();
+    loader.load(
+      'model.obj',  // твой .obj файл
+      function (obj) {
+        obj.scale.set(1, 1, 1);   // можно подогнать размер
+        obj.position.set(0, 0, 0);
+        scene.add(obj);
+      },
+      function (xhr) {
+        console.log((xhr.loaded / xhr.total * 100) + '% загружено');
+      },
+      function (error) {
+        console.error('Ошибка загрузки OBJ', error);
+      }
+    );
+
+    // Анимация
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Адаптация к окну
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
