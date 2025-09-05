@@ -1,396 +1,92 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Сцена: ландшафт, река, деревья, дома и ракета</title>
+  <meta charset="UTF-8" />
+  <title>Polygon Split 3D</title>
   <style>
-    html, body { height: 100%; margin: 0; background:#a9c7df; overflow: hidden; }
-    #info {
-      position: fixed; left: 12px; top: 10px; z-index: 10; font: 13px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: rgba(255,255,255,.85); padding: 8px 10px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.15);
-    }
-    canvas { display:block }
+    body { margin: 0; overflow: hidden; background: black; }
+    canvas { display: block; }
   </style>
 </head>
 <body>
-<div id="info">ЛКМ — вращение, Колесо — зум, ПКМ — панорамирование</div>
-<script type="module">
-import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js';
+<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
 
-///// БАЗОВАЯ СЦЕНА /////////////////////////////////////////////////////////////
-const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xa9c7df, 80, 280);
+<script>
+let scene, camera, renderer;
+let polygons = [];
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(devicePixelRatio);
-renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-document.body.appendChild(renderer.domElement);
+init();
+animate();
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 1000);
-camera.position.set(85, 55, 95);
+function init() {
+  scene = new THREE.Scene();
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 7.5, 0);
-controls.enableDamping = true;
+  camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 0, 10);
 
-///// СВЕТ //////////////////////////////////////////////////////////////////////
-const sun = new THREE.DirectionalLight(0xffffff, 1.1);
-sun.position.set(80, 120, 40);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -160;
-sun.shadow.camera.right = 160;
-sun.shadow.camera.top = 120;
-sun.shadow.camera.bottom = -120;
-sun.shadow.camera.near = 10;
-sun.shadow.camera.far = 400;
-scene.add(sun);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x4b7a2e, 0.55));
+  // свет
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(5, 5, 5);
+  scene.add(dirLight);
 
-///// ОСНОВАНИЕ ЛАНДШАФТА (виде «кусок земли») /////////////////////////////////
-const chunkSize = 160;
-const baseH = 24;
-
-const baseGeo = new THREE.BoxGeometry(chunkSize, baseH, chunkSize);
-const sideMat = new THREE.MeshStandardMaterial({ color: 0x8a5a3a, roughness: 0.95, metalness: 0.0 });
-const base = new THREE.Mesh(baseGeo, sideMat);
-base.position.y = baseH/2 - 2; // чуть утопим, чтобы верх был ≈ 10
-base.receiveShadow = true;
-scene.add(base);
-
-// Трава (верхняя пластина)
-const topGeo = new THREE.PlaneGeometry(chunkSize, chunkSize, 100, 100);
-topGeo.rotateX(-Math.PI/2);
-
-// Небольшой «ручной» рельеф
-for (let i = 0; i < topGeo.attributes.position.count; i++) {
-  const x = topGeo.attributes.position.getX(i);
-  const z = topGeo.attributes.position.getZ(i);
-  const h =
-    4*Math.exp(-(x*x)/(2*1200) - (z*z)/(2*2000)) +           // холмик
-    1.6*Math.sin(x*0.05)*Math.cos(z*0.06);                   // волнистость
-  topGeo.attributes.position.setY(i, h + 10);
-}
-topGeo.computeVertexNormals();
-
-const grassMat = new THREE.MeshStandardMaterial({ color: 0x6fb76f, roughness: 0.95 });
-const top = new THREE.Mesh(topGeo, grassMat);
-top.receiveShadow = true;
-top.castShadow = false;
-scene.add(top);
-
-///// РЕКА: трубка по сплайну, чуть ниже поверхности ///////////////////////////
-const riverPathPts = [
-  new THREE.Vector3(-70, 9.2, 60),
-  new THREE.Vector3(-40, 9.1, 30),
-  new THREE.Vector3(-10, 9.0, 10),
-  new THREE.Vector3( 10, 8.9,-10),
-  new THREE.Vector3( 40, 8.8,-35),
-  new THREE.Vector3( 70, 8.7,-60)
-];
-const riverCurve = new THREE.CatmullRomCurve3(riverPathPts);
-const riverGeo = new THREE.TubeGeometry(riverCurve, 200, 4.0, 20, false);
-const riverMat = new THREE.MeshPhysicalMaterial({
-  color: 0x3a86ff,
-  transparent: true,
-  opacity: 0.9,
-  roughness: 0.25,
-  metalness: 0.1,
-  clearcoat: 0.8,
-  clearcoatRoughness: 0.35
-});
-const river = new THREE.Mesh(riverGeo, riverMat);
-river.castShadow = false;
-river.receiveShadow = true;
-scene.add(river);
-
-// Берег: светлее по краям (имитация песка вдоль реки — тонкое кольцо)
-const shoreGeo = new THREE.TubeGeometry(riverCurve, 200, 4.8, 32, false);
-const shoreMat = new THREE.MeshStandardMaterial({ color: 0xcdb588, roughness: 0.95 });
-const shore = new THREE.Mesh(shoreGeo, shoreMat);
-shore.position.y += 0.25;
-scene.add(shore);
-
-///// ДОРОЖКА ДЕРЕВНИ //////////////////////////////////////////////////////////
-const pathCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(-55, 10.2, -10),
-  new THREE.Vector3(-20, 10.6,  10),
-  new THREE.Vector3(  5, 11.0,  15),
-  new THREE.Vector3( 35, 10.6,  10),
-  new THREE.Vector3( 55, 10.2, -15)
-]);
-const pathGeo = new THREE.TubeGeometry(pathCurve, 160, 1.6, 16, false);
-const pathMat = new THREE.MeshStandardMaterial({ color: 0xbfa36a, roughness: 0.95 });
-const pathMesh = new THREE.Mesh(pathGeo, pathMat);
-pathMesh.receiveShadow = true;
-scene.add(pathMesh);
-
-///// МОДУЛИ: дерево, дом, «человек», «животное», забор ////////////////////////
-function makeTree() {
-  const g1 = new THREE.CylinderGeometry(0.5, 0.8, 6, 8);
-  const m1 = new THREE.MeshStandardMaterial({ color: 0x5d3d26, roughness: 0.95 });
-  const trunk = new THREE.Mesh(g1, m1);
-  trunk.castShadow = true; trunk.receiveShadow = true;
-
-  const crown = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(3.4, 1),
-    new THREE.MeshStandardMaterial({ color: 0x5dab5f, roughness: 0.8 })
-  );
-  crown.position.y = 5;
-  crown.castShadow = true;
-
-  const group = new THREE.Group();
-  group.add(trunk, crown);
-  return group;
+  // стартовый полигон
+  createPolygon(new THREE.Vector3(0,0,0), 2, "X");
 }
 
-function makeHouse(scale=1) {
-  const house = new THREE.Group();
-
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(8, 4.5, 6),
-    new THREE.MeshStandardMaterial({ color: 0xc7b9a5, roughness: 0.95 })
-  );
-  body.position.y = 2.6;
-  body.castShadow = true; body.receiveShadow = true;
-
-  const roof = new THREE.Mesh(
-    new THREE.ConeGeometry(6.4, 3.8, 4),
-    new THREE.MeshStandardMaterial({ color: 0x8b4a2f, roughness: 0.9 })
-  );
-  roof.rotation.y = Math.PI/4;
-  roof.position.y = 5;
-  roof.castShadow = true;
-
-  house.add(body, roof);
-
-  // Маленький забор вокруг дома
-  const fence = new THREE.Group();
-  const postMat = new THREE.MeshStandardMaterial({ color: 0x7a5234, roughness: 0.95 });
-  for (let i=0;i<12;i++){
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.8, 0.2), postMat);
-    const angle = (i/12)*Math.PI*2;
-    post.position.set(Math.cos(angle)*6.5, 0.4, Math.sin(angle)*6.5);
-    post.castShadow = true;
-    fence.add(post);
-  }
-  house.add(fence);
-
-  house.scale.setScalar(scale);
-  return house;
-}
-
-function makePerson() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 0.9, 4, 8),
-                              new THREE.MeshStandardMaterial({ color: 0x6d84c4, roughness: 0.9 }));
-  body.castShadow = true; body.receiveShadow = true;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 16, 16),
-                              new THREE.MeshStandardMaterial({ color: 0xffe0bd, roughness: 0.7 }));
-  head.position.y = 0.95;
-  head.castShadow = true;
-  g.add(body, head);
-  g.position.y = 10.1;
-  return g;
-}
-
-function makeAnimal() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.7, 0.6),
-                              new THREE.MeshStandardMaterial({ color: 0x8a613d, roughness: 0.95 }));
-  body.castShadow = true; body.receiveShadow = true;
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5),
-                              new THREE.MeshStandardMaterial({ color: 0x7a5131, roughness: 0.95 }));
-  head.position.set(0.9, 0.1, 0);
-  head.castShadow = true;
-  const legGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.6, 6);
-  const legMat = new THREE.MeshStandardMaterial({ color: 0x4b2e1c, roughness: 0.95 });
-  const legs = new THREE.Group();
-  [[-0.5,-0.3],[-0.5,0.3],[0.3,-0.3],[0.3,0.3]].forEach(p=>{
-    const leg = new THREE.Mesh(legGeo, legMat);
-    leg.position.set(p[0], -0.4, p[1]);
-    leg.castShadow = true; leg.receiveShadow = true;
-    legs.add(leg);
+function createPolygon(position, size, axis) {
+  const geometry = new THREE.PlaneGeometry(size, size);
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.15,
+    side: THREE.DoubleSide
   });
-  g.add(body, head, legs);
-  g.position.y = 10.1;
-  return g;
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.copy(position);
+
+  if (axis === "Y") mesh.rotation.y = Math.PI / 2;
+  if (axis === "Z") mesh.rotation.x = Math.PI / 2;
+
+  scene.add(mesh);
+
+  polygons.push({ mesh, size, axis, splitTime: performance.now() });
 }
-
-///// РАСКЛАДКА ДЕРЕВЬЕВ ///////////////////////////////////////////////////////
-const rng = (a,b)=>a+Math.random()*(b-a);
-for (let i=0;i<36;i++){
-  const t = makeTree();
-  let x = rng(-70,70), z = rng(-70,70);
-
-  // избегаем русла реки (грубый отбор)
-  const p = riverCurve.getPoint(Math.random());
-  if (new THREE.Vector2(x - p.x, z - p.z).length() < 12) { i--; continue; }
-
-  t.position.set(x, 10.2, z);
-  scene.add(t);
-}
-
-///// ДОМА //////////////////////////////////////////////////////////////////////
-const housePositions = [
-  {x:-25,z: 18,s:1.0},{x:  5,z: 22,s:0.9},{x: 28,z:  8,s:1.1},{x: 45,z:-10,s:0.95}
-];
-housePositions.forEach(h=>{
-  const home = makeHouse(h.s);
-  home.position.set(h.x, 10.15, h.z);
-  home.rotation.y = rng(-Math.PI,Math.PI);
-  home.traverse(o=>{ o.castShadow = true; o.receiveShadow = true; });
-  scene.add(home);
-});
-
-///// ЛЮДИ И ЖИВОТНЫЕ //////////////////////////////////////////////////////////
-for (let i=0;i<6;i++){
-  const p = makePerson();
-  p.position.x = rng(-45, 55);
-  p.position.z = rng(-25, 30);
-  scene.add(p);
-}
-for (let i=0;i<4;i++){
-  const a = makeAnimal();
-  a.position.x = rng(-10, 60);
-  a.position.z = rng(-40, 35);
-  scene.add(a);
-}
-
-///// РАКЕТА + ШЛЕЙФ ///////////////////////////////////////////////////////////
-const missile = new THREE.Group();
-const bodyM = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.7, 0.7, 6, 16),
-  new THREE.MeshStandardMaterial({ color: 0xbfc3c7, metalness: 0.3, roughness: 0.5 })
-);
-bodyM.rotation.z = Math.PI/2;
-const nose = new THREE.Mesh(
-  new THREE.ConeGeometry(0.75, 1.3, 16),
-  new THREE.MeshStandardMaterial({ color: 0xd9dde1, metalness: 0.4, roughness: 0.4 })
-);
-nose.position.x = 3.6;
-nose.rotation.z = Math.PI/2;
-
-const finGeo = new THREE.BoxGeometry(0.1, 1.0, 1.6);
-const finMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, metalness: 0.2, roughness: 0.6 });
-[-0.6, 0.6].forEach((y,i)=>{
-  const finTop = new THREE.Mesh(finGeo, finMat);
-  finTop.position.set(-2.8, y, 0);
-  const finSide = new THREE.Mesh(finGeo, finMat);
-  finSide.position.set(-2.8, 0, y);
-  missile.add(finTop, finSide);
-});
-
-missile.add(bodyM, nose);
-missile.position.set(-120, 55, -60);
-missile.castShadow = true;
-scene.add(missile);
-
-// Траектория полёта над ландшафтом
-const flightCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(-120, 55, -60),
-  new THREE.Vector3(-60,  70,  20),
-  new THREE.Vector3(  0,  62,   0),
-  new THREE.Vector3( 60,  65, -10),
-  new THREE.Vector3(120,  58,  40)
-]);
-
-// Шлейф: менеджер «дыма» — спрайты, которые растут и растворяются
-const smokePuffs = [];
-const smokeTexture = makeSoftCircleTexture();
-
-function spawnSmoke(position, direction) {
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTexture, transparent: true, opacity: 0.9, depthWrite:false }));
-  s.scale.set(2.5, 2.5, 1);
-  s.position.copy(position).addScaledVector(direction, -2.0);
-  s.position.y += rng(-0.2, 0.2);
-  s.userData = { life: 1.0, growth: rng(0.6,1.0), fade: rng(0.45,0.7) };
-  s.renderOrder = 2;
-  scene.add(s);
-  smokePuffs.push(s);
-}
-
-// вспомогательная: рисуем мягкий круг в canvas (текстура дыма)
-function makeSoftCircleTexture() {
-  const size = 128;
-  const cnv = document.createElement('canvas');
-  cnv.width = cnv.height = size;
-  const ctx = cnv.getContext('2d');
-  const g = ctx.createRadialGradient(size/2, size/2, 1, size/2, size/2, size/2);
-  g.addColorStop(0, 'rgba(255,255,255,0.9)');
-  g.addColorStop(0.3, 'rgba(255,255,255,0.6)');
-  g.addColorStop(0.65,'rgba(200,200,200,0.35)');
-  g.addColorStop(1, 'rgba(200,200,200,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0,0,size,size);
-  const tex = new THREE.CanvasTexture(cnv);
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  return tex;
-}
-
-///// АНИМАЦИЯ /////////////////////////////////////////////////////////////////
-let t = 0;          // 0..1 вдоль траектории ракеты
-let riverPhase = 0; // «анимация» бликов воды
-
-const tmp1 = new THREE.Vector3();
-const tmp2 = new THREE.Vector3();
 
 function animate() {
   requestAnimationFrame(animate);
 
-  controls.update();
+  const now = performance.now();
 
-  // Ручей — легкая «живая» игра бликов: меняем цвет/прозрачность со временем
-  riverPhase += 0.01;
-  river.material.opacity = 0.85 + Math.sin(riverPhase)*0.05;
-  river.material.color.setHSL(0.58, 0.7, 0.52 + 0.03*Math.sin(riverPhase*1.7));
+  for (let i = polygons.length - 1; i >= 0; i--) {
+    const poly = polygons[i];
 
-  // Полёт ракеты
-  t += 0.0018; // скорость
-  if (t > 1) t = 0;
-  flightCurve.getPointAt(t, tmp1);
-  missile.position.copy(tmp1);
-  // ориентация по касательной
-  const tAhead = (t + 0.002) % 1;
-  flightCurve.getPointAt(tAhead, tmp2);
-  const dir = tmp2.clone().sub(tmp1).normalize();
-  const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,0), dir);
-  missile.quaternion.copy(quat);
+    // теперь деление каждые 0.5 секунды
+    if (now - poly.splitTime > 500 && poly.size > 0.2) {
+      polygons.splice(i, 1);
+      scene.remove(poly.mesh);
 
-  // шлейф — периодические «пухи»
-  if (Math.random() < 0.9) spawnSmoke(missile.position, dir);
+      const newSize = poly.size / 2;
+      const offset = poly.size / 2;
 
-  // обновляем частицы дыма
-  for (let i = smokePuffs.length-1; i>=0; i--) {
-    const s = smokePuffs[i];
-    s.userData.life -= 0.01*s.userData.fade;
-    s.scale.addScalar(0.03*s.userData.growth);
-    s.material.opacity = Math.max(0, s.userData.life);
-    s.position.y += 0.01; // лёгкий подъём
-    if (s.userData.life <= 0) {
-      scene.remove(s);
-      s.material.map.dispose();
-      s.material.dispose();
-      smokePuffs.splice(i,1);
+      // создаём новые полигоны сразу по всем трём осям
+      createPolygon(new THREE.Vector3(poly.mesh.position.x + offset/2, poly.mesh.position.y, poly.mesh.position.z), newSize, "X");
+      createPolygon(new THREE.Vector3(poly.mesh.position.x - offset/2, poly.mesh.position.y, poly.mesh.position.z), newSize, "X");
+
+      createPolygon(new THREE.Vector3(poly.mesh.position.x, poly.mesh.position.y + offset/2, poly.mesh.position.z), newSize, "Y");
+      createPolygon(new THREE.Vector3(poly.mesh.position.x, poly.mesh.position.y - offset/2, poly.mesh.position.z), newSize, "Y");
+
+      createPolygon(new THREE.Vector3(poly.mesh.position.x, poly.mesh.position.y, poly.mesh.position.z + offset/2), newSize, "Z");
+      createPolygon(new THREE.Vector3(poly.mesh.position.x, poly.mesh.position.y, poly.mesh.position.z - offset/2), newSize, "Z");
     }
   }
 
   renderer.render(scene, camera);
 }
-animate();
-
-///// РЕСАЙЗ ///////////////////////////////////////////////////////////////////
-addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
 </script>
 </body>
 </html>
