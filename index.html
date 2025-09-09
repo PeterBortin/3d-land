@@ -1,132 +1,873 @@
-<html>
-<style type="text/css"></style><style>
-  @import 'https://fonts.googleapis.com/css?family=Inconsolata';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Organism Simulator</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #000;
+            overflow: hidden;
+            font-family: monospace;
+            color: #0f0;
+        }
+        #console {
+            position: absolute;
+            top: 10px;
+            width: 400px;
+            height: 60px;
+            background-color: #111;
+            border: 2px solid #0f0;
+            padding: 5px;
+            font-size: 12px;
+            line-height: 20px;
+            overflow: hidden;
+        }
+        canvas {
+            width: 400px;
+            height: 600px;
+            image-rendering: pixelated;
+            border: 2px solid #0f0;
+            background-color: #111;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="console"></div>
+    <canvas id="simulationCanvas" width="100" height="150"></canvas>
+    <script>
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+        const consoleDiv = document.getElementById('console');
 
-html {
-  min-height: 100%;
-}
+        // Simulation parameters
+        const WIDTH = canvas.width;
+        const HEIGHT = canvas.height;
+        const INITIAL_ORGANISMS = 1;
+        const INITIAL_FOOD = 0;
+        const MAX_ENERGY = 200;
+        const MIN_ENERGY_TO_LAY_EGG = 150;
+        const ENERGY_LOSS_PER_FRAME = 0.01;
+        const FOOD_ENERGY = 20;
+        const CORPSE_ENERGY_GAIN = 60;
+        const PARASITE_ENERGY_GAIN = 80;
+        const PREDATION_ENERGY_GAIN = 40;
+        const VISION_RANGE = 12;
+        const COLLISION_DIST = 3;
+        const WALL_AVOID_DIST = 5;
+        const EGG_HATCH_FRAMES = 180;
+        const PARASITE_SPAWN_CHANCE = 0.2;
+        const MAX_CORPSES = 100;
+        const MIN_FOOD_SPACING = 2;
+        const BUBBLE_SPAWN_INTERVAL = 600;
+        const BUBBLE_MAX_RADIUS = 30;
+        const BUBBLE_GROWTH_FRAMES = 120;
+        const BACTERIUM_SPAWN_INTERVAL = 1200; // 20 seconds at 60 FPS
+        const INFECTION_DURATION = 1800; // 30 seconds at 60 FPS
 
-body {
-  margin: 0;
-  overflow: hidden;
-  box-sizing: border-box;
-  height: 100%;
-  background-color: #000000;
-  background-image: radial-gradient(#11581E, #041607), url("https://media.giphy.com/media/oEI9uBYSzLpBK/giphy.gif");
-  background-repeat: no-repeat;
-  background-size: cover;
-  font-family: 'Inconsolata', Helvetica, sans-serif;
-  font-size: 1.5rem;
-  color: rgba(128, 255, 128, 0.8);
-  text-shadow:
-      0 0 1ex rgba(51, 255, 51, 1),
-      0 0 2px rgba(255, 255, 255, 0.8);
-}
+        let organisms = [];
+        let eggs = [];
+        let foodParticles = [];
+        let corpses = [];
+        let bubbles = [];
+        let bacteria = [];
+        let isDrawing = false;
+        let lastFoodX = -1;
+        let lastFoodY = -1;
+        let frameCount = 0;
+        let consoleMessages = [];
+        let isRunning = true;
 
-.noise {
-  pointer-events: none;
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  background-image: url("https://media.giphy.com/media/oEI9uBYSzLpBK/giphy.gif");
-  background-repeat: no-repeat;
-  background-size: cover;
-  z-index: -1;
-  opacity: .02;
-}
+        class Organism {
+            constructor(x, y, energy = 50, segmentCount = 5, type = 'green') {
+                this.energy = energy;
+                this.segmentCount = segmentCount;
+                this.angle = Math.random() * 2 * Math.PI;
+                this.speed = 0.025 + (energy / MAX_ENERGY) * 0.075; // Same for green and red
+                this.type = type;
+                this.isDead = false;
+                this.infected = false;
+                this.infectionTimer = 0;
+                this.segments = [];
+                for (let i = 0; i < this.segmentCount; i++) {
+                    this.segments.push({
+                        x: x - Math.cos(this.angle) * i * 1.5,
+                        y: y - Math.sin(this.angle) * i * 1.5
+                    });
+                }
+                this.updateColor();
+            }
 
-.overlay {
-  pointer-events: none;
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  background:
-      repeating-linear-gradient(
-      180deg,
-      rgba(0, 0, 0, 0) 0,
-      rgba(0, 0, 0, 0.3) 50%,
-      rgba(0, 0, 0, 0) 100%);
-  background-size: auto 4px;
-  z-index: 1;
-}
+            updateColor() {
+                const t = Math.min(this.energy / MAX_ENERGY, 1);
+                if (this.type === 'red') {
+                    const r = Math.floor(85 + 170 * t); // Red: 85 to 255
+                    const g = Math.floor(85 * (1 - t)); // Green: 85 to 0
+                    const b = Math.floor(85 * (1 - t)); // Blue: 85 to 0
+                    this.color = `rgb(${r},${g},${b})`;
+                } else {
+                    const r = Math.floor(85 * (1 - t)); // Red: 85 to 0
+                    const g = Math.floor(85 + 170 * t); // Green: 85 to 255
+                    const b = Math.floor(85 * (1 - t)); // Blue: 85 to 0
+                    this.color = `rgb(${r},${g},${b})`;
+                }
+            }
 
-.overlay::before {
-  content: "";
-  pointer-events: none;
-  position: absolute;
-  display: block;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  width: 100%;
-  height: 100%;
-  background-image: linear-gradient(
-      0deg,
-      transparent 0%,
-      rgba(32, 128, 32, 0.2) 2%,
-      rgba(32, 128, 32, 0.8) 3%,
-      rgba(32, 128, 32, 0.2) 3%,
-      transparent 100%);
-  background-repeat: no-repeat;
-  animation: scan 7.5s linear 0s infinite;
-}
+            update() {
+                try {
+                    if (this.isDead) {
+                        return false;
+                    }
+                    const head = this.segments[0];
 
-@keyframes scan {
-  0%        { background-position: 0 -100vh; }
-  35%, 100% { background-position: 0 100vh; }
-}
+                    // Handle infection
+                    if (this.infected) {
+                        this.infectionTimer--;
+                        if (this.infectionTimer <= 0) {
+                            this.isDead = true;
+                            if (corpses.length < MAX_CORPSES) {
+                                corpses.push(new Corpse(head.x, head.y, CORPSE_ENERGY_GAIN));
+                            }
+                            addConsoleMessage(`${this.type === 'red' ? 'Красный' : 'Зеленый'} организм умер от инфекции`);
+                            return false;
+                        }
+                    }
 
-.terminal {
-  box-sizing: inherit;
-  position: absolute;
-  height: 100%;
-  width: 1000px;
-  max-width: 100%;
-  padding: 4rem;
-  text-transform: uppercase;
-}
+                    // Avoid walls
+                    const futureX = head.x + Math.cos(this.angle) * this.speed * 10;
+                    const futureY = head.y + Math.sin(this.angle) * this.speed * 10;
+                    if (futureX < WALL_AVOID_DIST || futureX > WIDTH - WALL_AVOID_DIST ||
+                        futureY < WALL_AVOID_DIST || futureY > HEIGHT - WALL_AVOID_DIST) {
+                        this.angle += (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2;
+                    }
 
-.output {
-  color: rgba(128, 255, 128, 0.8);
-  text-shadow:
-      0 0 1px rgba(51, 255, 51, 0.4),
-      0 0 2px rgba(255, 255, 255, 0.8);
-}
+                    // Intelligence
+                    let target = null;
+                    let avoidBubble = null;
+                    let minBubbleDist = Infinity;
 
-.output::before {
-  content: "> ";
-}
+                    // Check for bubbles to avoid
+                    for (let bubble of bubbles) {
+                        const d = Math.hypot(bubble.x - head.x, bubble.y - head.y);
+                        if (d < VISION_RANGE && d < minBubbleDist) {
+                            minBubbleDist = d;
+                            avoidBubble = bubble;
+                        }
+                    }
 
-.input {
-  color: rgba(192, 255, 192, 0.8);
-  text-shadow:
-      0 0 1px rgba(51, 255, 51, 0.4),
-      0 0 2px rgba(255, 255, 255, 0.8);
-}
+                    if (avoidBubble) {
+                        this.angle = Math.atan2(head.y - avoidBubble.y, head.x - avoidBubble.x);
+                    } else {
+                        if (this.energy < 50) {
+                            let minDist = Infinity;
+                            for (let corpse of corpses) {
+                                const d = Math.hypot(corpse.x - head.x, corpse.y - head.y);
+                                if (d < VISION_RANGE && d < minDist) {
+                                    minDist = d;
+                                    target = {x: corpse.x, y: corpse.y};
+                                }
+                            }
+                        } else {
+                            let minDist = Infinity;
+                            for (let food of foodParticles) {
+                                const d = Math.hypot(food.x - head.x, food.y - head.y);
+                                if (d < VISION_RANGE && d < minDist) {
+                                    minDist = d;
+                                    target = {x: food.x, y: food.y};
+                                }
+                            }
+                            for (let bacterium of bacteria) {
+                                const d = Math.hypot(bacterium.x - head.x, bacterium.y - head.y);
+                                if (d < VISION_RANGE && d < minDist) {
+                                    minDist = d;
+                                    target = {x: bacterium.x, y: bacterium.y};
+                                }
+                            }
+                        }
 
-.input::before {
-  content: "$ ";
-}
+                        if (this.type === 'red' && !target) {
+                            let minEnergy = Infinity;
+                            for (let org of organisms) {
+                                if (org.type === 'red' || org.energy >= this.energy) continue;
+                                const d = Math.hypot(org.segments[0].x - head.x, org.segments[0].y - head.y);
+                                if (d < VISION_RANGE && org.energy < minEnergy) {
+                                    minEnergy = org.energy;
+                                    target = org.segments[0];
+                                }
+                            }
+                        } else if (this.type === 'green' && this.energy > 75 && !target) {
+                            let minDist = Infinity;
+                            for (let org of organisms) {
+                                if (org.type !== 'red') continue;
+                                const d = Math.hypot(org.segments[0].x - head.x, org.segments[0].y - head.y);
+                                if (d < VISION_RANGE && d < minDist) {
+                                    minDist = d;
+                                    target = org.segments[0];
+                                }
+                            }
+                        }
 
-a {
-  color: #fff;
-  text-decoration: none;
-}
+                        if (target) {
+                            this.angle = Math.atan2(target.y - head.y, target.x - head.x);
+                        } else if (Math.random() < 0.05) {
+                            this.angle += (Math.random() - 0.5) * Math.PI / 2;
+                        }
+                    }
 
-.errorcode {
-  color: white;
-}
+                    // Move head
+                    head.x += Math.cos(this.angle) * this.speed;
+                    head.y += Math.sin(this.angle) * this.speed;
 
-</style>
+                    // Clamp boundaries
+                    head.x = Math.max(0, Math.min(WIDTH, head.x));
+                    head.y = Math.max(0, Math.min(HEIGHT, head.y));
 
-<div class="noise"></div>
-<div class="overlay"></div>
-<div class="terminal">
-  <h1>Сталевий Щит <span class="errorcode">6847.26</span></h1>
-  <h3>Державна програма оборони та захисту населення і інфраструктури громад</h3>
-  <p class="output">Система захищена протоколами захисту</p>
-  <p class="output">Злам крається законом</p>
-  <p class="output"><a href="#1">Інструкції</a> або <a href="#2">Вхід до системи</a></p>
-</div>
+                    // Move segments
+                    for (let i = 1; i < this.segments.length; i++) {
+                        const prev = this.segments[i - 1];
+                        const curr = this.segments[i];
+                        const dx = prev.x - curr.x;
+                        const dy = prev.y - curr.y;
+                        const dist = Math.hypot(dx, dy);
+                        if (dist > 1) {
+                            curr.x += (dx / dist) * (dist - 1);
+                            curr.y += (dy / dist) * (dist - 1);
+                        }
+                    }
+
+                    // Lose energy
+                    this.energy -= ENERGY_LOSS_PER_FRAME;
+                    this.energy = Math.max(1, this.energy);
+
+                    // Adjust segments
+                    const idealSegments = Math.max(2, Math.floor(this.energy / 15) + 2);
+                    if (idealSegments > this.segmentCount && this.segmentCount < 15) {
+                        if (this.segmentCount >= 2) {
+                            const tail = this.segments[this.segmentCount - 1];
+                            const prevTail = this.segments[this.segmentCount - 2];
+                            const dx = tail.x - prevTail.x;
+                            const dy = tail.y - prevTail.y;
+                            const dist = Math.hypot(dx, dy);
+                            const newX = dist > 0 ? tail.x + (dx / dist) * 0.5 : tail.x + 0.5;
+                            const newY = dist > 0 ? tail.y + (dy / dist) * 0.5 : tail.y + 0.5;
+                            this.segments.push({x: newX, y: newY});
+                            this.segmentCount++;
+                        }
+                    } else if (idealSegments < this.segmentCount) {
+                        this.segments.pop();
+                        this.segmentCount--;
+                    }
+
+                    // Lay egg if overfed
+                    if (this.energy > MIN_ENERGY_TO_LAY_EGG && Math.random() < 0.01) {
+                        this.layEgg();
+                    }
+
+                    // Update speed and color
+                    this.speed = 0.025 + (this.energy / MAX_ENERGY) * 0.075;
+                    this.updateColor();
+
+                    return true;
+                } catch (e) {
+                    console.error(`Ошибка в Organism.update: ${e.message}`);
+                    addConsoleMessage("Ошибка в обновлении организма");
+                    return false;
+                }
+            }
+
+            layEgg() {
+                try {
+                    const childEnergy = 20 + Math.random() * 10;
+                    if (this.energy - childEnergy < 10) return;
+                    this.energy -= childEnergy;
+                    const head = this.segments[0];
+                    eggs.push(new Egg(head.x + (Math.random() - 0.5) * 5, head.y + (Math.random() - 0.5) * 5, childEnergy, this.type));
+                    addConsoleMessage("Яйцо отложено");
+                } catch (e) {
+                    console.error(`Ошибка в layEgg: ${e.message}`);
+                    addConsoleMessage("Ошибка при откладывании яйца");
+                }
+            }
+
+            eatFood(index) {
+                try {
+                    this.energy = Math.min(MAX_ENERGY, this.energy + FOOD_ENERGY);
+                    foodParticles.splice(index, 1);
+                    addConsoleMessage("Еда съедена");
+                    if (this.type === 'green' && Math.random() < PARASITE_SPAWN_CHANCE) {
+                        organisms.push(new Organism(this.segments[0].x, this.segments[0].y, 50, 5, 'red'));
+                        addConsoleMessage("Красный организм появился");
+                    }
+                    if (this.segmentCount < 15) {
+                        const tail = this.segments[this.segmentCount - 1];
+                        const prevTail = this.segments[this.segmentCount - 2];
+                        const dx = tail.x - prevTail.x;
+                        const dy = tail.y - prevTail.y;
+                        const dist = Math.hypot(dx, dy);
+                        const newX = dist > 0 ? tail.x + (dx / dist) * 0.5 : tail.x + 0.5;
+                        const newY = dist > 0 ? tail.y + (dy / dist) * 0.5 : tail.y + 0.5;
+                        this.segments.push({x: newX, y: newY});
+                        this.segmentCount++;
+                        addConsoleMessage("Организм вырос");
+                    }
+                    this.updateColor();
+                } catch (e) {
+                    console.error(`Ошибка в eatFood: ${e.message}`);
+                    addConsoleMessage("Ошибка при поедании еды");
+                }
+            }
+
+            eatCorpse(index) {
+                try {
+                    this.energy = Math.min(MAX_ENERGY, this.energy + corpses[index].energy);
+                    const segmentsToAdd = Math.floor(corpses[index].energy / 15);
+                    corpses.splice(index, 1);
+                    addConsoleMessage("Труп съеден");
+                    if (this.type === 'green' && Math.random() < PARASITE_SPAWN_CHANCE) {
+                        organisms.push(new Organism(this.segments[0].x, this.segments[0].y, 50, 5, 'red'));
+                        addConsoleMessage("Красный организм появился");
+                    }
+                    for (let i = 0; i < segmentsToAdd && this.segmentCount < 15; i++) {
+                        const tail = this.segments[this.segmentCount - 1];
+                        const prevTail = this.segments[this.segmentCount - 2];
+                        const dx = tail.x - prevTail.x;
+                        const dy = tail.y - prevTail.y;
+                        const dist = Math.hypot(dx, dy);
+                        const newX = dist > 0 ? tail.x + (dx / dist) * 0.5 : tail.x + 0.5;
+                        const newY = dist > 0 ? tail.y + (dy / dist) * 0.5 : tail.y + 0.5;
+                        this.segments.push({x: newX, y: newY});
+                        this.segmentCount++;
+                        addConsoleMessage("Организм вырос");
+                    }
+                    this.updateColor();
+                } catch (e) {
+                    console.error(`Ошибка в eatCorpse: ${e.message}`);
+                    addConsoleMessage("Ошибка при поедании трупа");
+                }
+            }
+
+            eatBacterium(index) {
+                try {
+                    this.energy = Math.min(MAX_ENERGY, this.energy + FOOD_ENERGY);
+                    bacteria.splice(index, 1);
+                    this.infected = true;
+                    this.infectionTimer = INFECTION_DURATION;
+                    addConsoleMessage(`${this.type === 'red' ? 'Красный' : 'Зеленый'} организм заражен бактерией`);
+                } catch (e) {
+                    console.error(`Ошибка в eatBacterium: ${e.message}`);
+                    addConsoleMessage("Ошибка при поедании бактерии");
+                }
+            }
+
+            eatOrganism(other) {
+                try {
+                    this.energy = Math.min(MAX_ENERGY, this.energy + (this.type === 'red' ? PARASITE_ENERGY_GAIN : PREDATION_ENERGY_GAIN));
+                    if (other.infected) {
+                        this.infected = true;
+                        this.infectionTimer = INFECTION_DURATION;
+                        addConsoleMessage(`${this.type === 'red' ? 'Красный' : 'Зеленый'} организм заражен от другого`);
+                    }
+                    other.isDead = true;
+                    addConsoleMessage(this.type === 'red' ? "Красный организм поглотил зеленый" : "Зеленый организм поглотил красный");
+                    const segmentsToAdd = Math.floor((this.type === 'red' ? PARASITE_ENERGY_GAIN : PREDATION_ENERGY_GAIN) / 15);
+                    for (let i = 0; i < segmentsToAdd && this.segmentCount < 15; i++) {
+                        const tail = this.segments[this.segmentCount - 1];
+                        const prevTail = this.segments[this.segmentCount - 2];
+                        const dx = tail.x - prevTail.x;
+                        const dy = tail.y - prevTail.y;
+                        const dist = Math.hypot(dx, dy);
+                        const newX = dist > 0 ? tail.x + (dx / dist) * 0.5 : tail.x + 0.5;
+                        const newY = dist > 0 ? tail.y + (dy / dist) * 0.5 : tail.y + 0.5;
+                        this.segments.push({x: newX, y: newY});
+                        this.segmentCount++;
+                        addConsoleMessage("Организм вырос");
+                    }
+                    this.updateColor();
+                } catch (e) {
+                    console.error(`Ошибка в eatOrganism: ${e.message}`);
+                    addConsoleMessage("Ошибка при поедании организма");
+                }
+            }
+
+            draw() {
+                try {
+                    const pulse = Math.sin(Date.now() / 150) * 0.5 + 1.5;
+                    // Blinking for infected organisms
+                    ctx.strokeStyle = this.infected && (frameCount % 30 < 15) ? '#f0f' : this.color;
+                    ctx.fillStyle = this.infected && (frameCount % 30 < 15) ? '#f0f' : this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.segments[0].x, this.segments[0].y, 1.5, 0, 2 * Math.PI);
+                    ctx.fill();
+                    for (let i = 1; i < this.segments.length; i++) {
+                        ctx.beginPath();
+                        ctx.moveTo(this.segments[i - 1].x, this.segments[i - 1].y);
+                        ctx.lineTo(this.segments[i].x, this.segments[i].y);
+                        ctx.lineWidth = 1 + (this.segments.length - i) / 5 * pulse;
+                        ctx.stroke();
+                    }
+                } catch (e) {
+                    console.error(`Ошибка в Organism.draw: ${e.message}`);
+                    addConsoleMessage("Ошибка при отрисовке организма");
+                }
+            }
+        }
+
+        class Egg {
+            constructor(x, y, energy, type = 'green') {
+                this.x = x;
+                this.y = y;
+                this.energy = energy;
+                this.type = type;
+                this.age = 0;
+            }
+
+            update() {
+                try {
+                    this.age++;
+                    if (this.age >= EGG_HATCH_FRAMES) {
+                        organisms.push(new Organism(this.x, this.y, this.energy, 5, this.type));
+                        addConsoleMessage(this.type === 'red' ? "Красный организм вылупился" : "Зеленый организм вылупился");
+                        return false;
+                    }
+                    return true;
+                } catch (e) {
+                    console.error(`Ошибка в Egg.update: ${e.message}`);
+                    addConsoleMessage("Ошибка в обновлении яйца");
+                    return false;
+                }
+            }
+
+            draw() {
+                try {
+                    ctx.fillStyle = this.type === 'red' ? '#800' : '#555';
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 1.5, 0, 2 * Math.PI);
+                    ctx.fill();
+                } catch (e) {
+                    console.error(`Ошибка в Egg.draw: ${e.message}`);
+                    addConsoleMessage("Ошибка при отрисовке яйца");
+                }
+            }
+        }
+
+        class FoodParticle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+
+            draw() {
+                try {
+                    ctx.fillStyle = '#ff0';
+                    ctx.fillRect(Math.floor(this.x), Math.floor(this.y), 1, 1);
+                } catch (e) {
+                    console.error(`Ошибка в FoodParticle.draw: ${e.message}`);
+                    addConsoleMessage("Ошибка при отрисовке еды");
+                }
+            }
+        }
+
+        class Corpse {
+            constructor(x, y, energy) {
+                this.x = x;
+                this.y = y;
+                this.energy = energy;
+            }
+
+            draw() {
+                try {
+                    ctx.fillStyle = '#fff';
+                    ctx.fillRect(Math.floor(this.x), Math.floor(this.y), 1, 1);
+                } catch (e) {
+                    console.error(`Ошибка в Corpse.draw: ${e.message}`);
+                    addConsoleMessage("Ошибка при отрисовке трупа");
+                }
+            }
+        }
+
+        class Bacterium {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+
+            draw() {
+                try {
+                    ctx.fillStyle = '#00f';
+                    ctx.beginPath();
+                    ctx.ellipse(this.x, this.y, 1.5, 1, 0, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.strokeStyle = '#00f';
+                    ctx.lineWidth = 0.5;
+                    for (let i = 0; i < 4; i++) {
+                        const angle = (i / 4) * 2 * Math.PI;
+                        ctx.beginPath();
+                        ctx.moveTo(this.x + Math.cos(angle) * 1.5, this.y + Math.sin(angle) * 1.5);
+                        ctx.lineTo(this.x + Math.cos(angle) * 2.5, this.y + Math.sin(angle) * 2.5);
+                        ctx.stroke();
+                    }
+                } catch (e) {
+                    console.error(`Ошибка в Bacterium.draw: ${e.message}`);
+                    addConsoleMessage("Ошибка при отрисовке бактерии");
+                }
+            }
+        }
+
+        class Bubble {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 0;
+                this.age = 0;
+            }
+
+            update() {
+                try {
+                    this.age++;
+                    this.radius = (this.age / BUBBLE_GROWTH_FRAMES) * BUBBLE_MAX_RADIUS;
+                    if (this.age >= BUBBLE_GROWTH_FRAMES) {
+                        organisms = organisms.filter(org => {
+                            try {
+                                const dist = Math.hypot(org.segments[0].x - this.x, org.segments[0].y - this.y);
+                                if (dist < BUBBLE_MAX_RADIUS) {
+                                    if (corpses.length < MAX_CORPSES) {
+                                        corpses.push(new Corpse(org.segments[0].x, org.segments[0].y, CORPSE_ENERGY_GAIN));
+                                    }
+                                    addConsoleMessage(`${org.type === 'red' ? 'Красный' : 'Зеленый'} организм убит пузырем`);
+                                    return false;
+                                }
+                                return true;
+                            } catch (e) {
+                                console.error(`Ошибка в фильтрации organisms в Bubble.update: ${e.message}`);
+                                addConsoleMessage("Ошибка при фильтрации организмов");
+                                return false;
+                            }
+                        });
+                        return false;
+                    }
+                    return true;
+                } catch (e) {
+                    console.error(`Ошибка в Bubble.update: ${e.message}`);
+                    addConsoleMessage("Ошибка в обновлении пузыря");
+                    return false;
+                }
+            }
+
+            draw() {
+                try {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, 2 * Math.PI);
+                    ctx.strokeStyle = '#f00';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                } catch (e) {
+                    console.error(`Ошибка в Bubble.draw: ${e.message}`);
+                    addConsoleMessage("Ошибка при отрисовке пузыря");
+                }
+            }
+        }
+
+        function addConsoleMessage(message) {
+            try {
+                const now = new Date();
+                const mmss = `${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+                const blockNumber = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+                consoleMessages.push(`${mmss} | ${message} | Блок ${blockNumber}`);
+                if (consoleMessages.length > 3) {
+                    consoleMessages.shift();
+                }
+                consoleDiv.innerHTML = consoleMessages.join('<br>');
+            } catch (e) {
+                console.error(`Ошибка в addConsoleMessage: ${e.message}`);
+            }
+        }
+
+        function initSimulation() {
+            try {
+                organisms = [];
+                eggs = [];
+                foodParticles = [];
+                corpses = [];
+                bubbles = [];
+                bacteria = [];
+                organisms.push(new Organism(Math.random() * WIDTH, Math.random() * HEIGHT, 50, 5, 'green'));
+                addConsoleMessage("Симуляция начата");
+            } catch (e) {
+                console.error(`Ошибка в initSimulation: ${e.message}`);
+                addConsoleMessage("Ошибка при инициализации симуляции");
+            }
+        }
+
+        function checkCollisions() {
+            try {
+                for (let i = organisms.length - 1; i >= 0; i--) {
+                    const org = organisms[i];
+                    if (!org || org.isDead) continue;
+                    const head = org.segments[0];
+                    for (let j = foodParticles.length - 1; j >= 0; j--) {
+                        if (!foodParticles[j]) continue;
+                        const food = foodParticles[j];
+                        const dist = Math.hypot(head.x - food.x, head.y - food.y);
+                        if (dist < COLLISION_DIST) {
+                            org.eatFood(j);
+                        }
+                    }
+                    for (let j = corpses.length - 1; j >= 0; j--) {
+                        if (!corpses[j]) continue;
+                        const corpse = corpses[j];
+                        const dist = Math.hypot(head.x - corpse.x, head.y - corpse.y);
+                        if (dist < COLLISION_DIST) {
+                            org.eatCorpse(j);
+                        }
+                    }
+                    for (let j = bacteria.length - 1; j >= 0; j--) {
+                        if (!bacteria[j]) continue;
+                        const bacterium = bacteria[j];
+                        const dist = Math.hypot(head.x - bacterium.x, head.y - bacterium.y);
+                        if (dist < COLLISION_DIST) {
+                            org.eatBacterium(j);
+                        }
+                    }
+                    if (org.type === 'green' && org.energy > 75) {
+                        for (let j = organisms.length - 1; j >= 0; j--) {
+                            if (!organisms[j] || organisms[j].isDead || organisms[j].type !== 'red') continue;
+                            const other = organisms[j];
+                            const otherHead = other.segments[0];
+                            const dist = Math.hypot(head.x - otherHead.x, head.y - otherHead.y);
+                            if (dist < COLLISION_DIST) {
+                                org.eatOrganism(other);
+                                organisms.splice(j, 1);
+                            }
+                        }
+                    } else if (org.type === 'red') {
+                        for (let j = organisms.length - 1; j >= 0; j--) {
+                            if (!organisms[j] || organisms[j].isDead || organisms[j].type !== 'green' || organisms[j].energy >= org.energy) continue;
+                            const other = organisms[j];
+                            const otherHead = other.segments[0];
+                            const dist = Math.hypot(head.x - otherHead.x, head.y - otherHead.y);
+                            if (dist < COLLISION_DIST) {
+                                org.eatOrganism(other);
+                                organisms.splice(j, 1);
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error(`Ошибка в checkCollisions: ${e.message}`);
+                addConsoleMessage("Ошибка при проверке столкновений");
+            }
+        }
+
+        function updateSimulation() {
+            try {
+                frameCount++;
+                if (frameCount % BUBBLE_SPAWN_INTERVAL === 0) {
+                    bubbles.push(new Bubble(Math.random() * WIDTH, Math.random() * HEIGHT));
+                    addConsoleMessage("Пузырь появился");
+                }
+                if (frameCount % BACTERIUM_SPAWN_INTERVAL === 0) {
+                    bacteria.push(new Bacterium(Math.random() * WIDTH, Math.random() * HEIGHT));
+                    addConsoleMessage("Бактерия появилась");
+                }
+
+                organisms = organisms.filter(org => {
+                    try {
+                        return org && !org.isDead && org.update();
+                    } catch (e) {
+                        console.error(`Ошибка при фильтрации organisms: ${e.message}`);
+                        addConsoleMessage("Ошибка при фильтрации организмов");
+                        return false;
+                    }
+                });
+
+                eggs = eggs.filter(egg => {
+                    try {
+                        return egg && egg.update();
+                    } catch (e) {
+                        console.error(`Ошибка при фильтрации eggs: ${e.message}`);
+                        addConsoleMessage("Ошибка при фильтрации яиц");
+                        return false;
+                    }
+                });
+
+                bubbles = bubbles.filter(bubble => {
+                    try {
+                        return bubble && bubble.update();
+                    } catch (e) {
+                        console.error(`Ошибка при фильтрации bubbles: ${e.message}`);
+                        addConsoleMessage("Ошибка при фильтрации пузырей");
+                        return false;
+                    }
+                });
+
+                bacteria = bacteria.filter(bacterium => bacterium);
+
+                checkCollisions();
+            } catch (e) {
+                console.error(`Ошибка в updateSimulation: ${e.message}`);
+                addConsoleMessage("Ошибка в обновлении симуляции");
+                isRunning = false;
+            }
+        }
+
+        function drawSimulation() {
+            try {
+                ctx.clearRect(0, 0, WIDTH, HEIGHT);
+                foodParticles.forEach(food => food && food.draw());
+                corpses.forEach(corpse => corpse && corpse.draw());
+                eggs.forEach(egg => egg && egg.draw());
+                organisms.forEach(org => org && !org.isDead && org.draw());
+                bacteria.forEach(bacterium => bacterium && bacterium.draw());
+                bubbles.forEach(bubble => bubble && bubble.draw());
+            } catch (e) {
+                console.error(`Ошибка в drawSimulation: ${e.message}`);
+                addConsoleMessage("Ошибка при отрисовке симуляции");
+                isRunning = false;
+            }
+        }
+
+        function gameLoop() {
+            if (!isRunning) {
+                console.error("Симуляция остановлена из-за ошибки");
+                addConsoleMessage("Симуляция остановлена");
+                return;
+            }
+            try {
+                updateSimulation();
+                drawSimulation();
+                requestAnimationFrame(gameLoop);
+            } catch (e) {
+                console.error(`Ошибка в gameLoop: ${e.message}`);
+                addConsoleMessage("Ошибка в игровом цикле");
+                isRunning = false;
+            }
+        }
+
+        function getPosition(event) {
+            try {
+                const rect = canvas.getBoundingClientRect();
+                let clientX = event.clientX;
+                let clientY = event.clientY;
+                if (event.touches && event.touches.length > 0) {
+                    clientX = event.touches[0].clientX;
+                    clientY = event.touches[0].clientY;
+                }
+                const x = (clientX - rect.left) / rect.width * WIDTH;
+                const y = (clientY - rect.top) / rect.height * HEIGHT;
+                return { x, y };
+            } catch (e) {
+                console.error(`Ошибка в getPosition: ${e.message}`);
+                addConsoleMessage("Ошибка при получении позиции");
+                return { x: 0, y: 0 };
+            }
+        }
+
+        function addFoodLine(x1, y1, x2, y2) {
+            try {
+                const dist = Math.hypot(x2 - x1, y2 - y1);
+                if (dist < MIN_FOOD_SPACING) return;
+                const steps = Math.ceil(dist / MIN_FOOD_SPACING);
+                for (let i = 1; i < steps; i++) {
+                    const frac = i / steps;
+                    const px = x1 + (x2 - x1) * frac;
+                    const py = y1 + (y2 - y1) * frac;
+                    foodParticles.push(new FoodParticle(px, py));
+                }
+            } catch (e) {
+                console.error(`Ошибка в addFoodLine: ${e.message}`);
+                addConsoleMessage("Ошибка при добавлении линии еды");
+            }
+        }
+
+        // Mouse events
+        canvas.addEventListener('mousedown', (e) => {
+            try {
+                isDrawing = true;
+                const pos = getPosition(e);
+                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                lastFoodX = pos.x;
+                lastFoodY = pos.y;
+                addConsoleMessage("Еда добавлена");
+            } catch (e) {
+                console.error(`Ошибка в mousedown: ${e.message}`);
+                addConsoleMessage("Ошибка при добавлении еды");
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            try {
+                if (!isDrawing) return;
+                const pos = getPosition(e);
+                const dist = Math.hypot(pos.x - lastFoodX, pos.y - lastFoodY);
+                if (dist < MIN_FOOD_SPACING) return;
+                addFoodLine(lastFoodX, lastFoodY, pos.x, pos.y);
+                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                lastFoodX = pos.x;
+                lastFoodY = pos.y;
+                addConsoleMessage("Еда добавлена");
+            } catch (e) {
+                console.error(`Ошибка в mousemove: ${e.message}`);
+                addConsoleMessage("Ошибка при движении мыши");
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDrawing = false;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            isDrawing = false;
+        });
+
+        // Touch events
+        canvas.addEventListener('touchstart', (e) => {
+            try {
+                e.preventDefault();
+                isDrawing = true;
+                const pos = getPosition(e);
+                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                lastFoodX = pos.x;
+                lastFoodY = pos.y;
+                addConsoleMessage("Еда добавлена");
+            } catch (e) {
+                console.error(`Ошибка в touchstart: ${e.message}`);
+                addConsoleMessage("Ошибка при касании");
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            try {
+                e.preventDefault();
+                if (!isDrawing) return;
+                const pos = getPosition(e);
+                const dist = Math.hypot(pos.x - lastFoodX, pos.y - lastFoodY);
+                if (dist < MIN_FOOD_SPACING) return;
+                addFoodLine(lastFoodX, lastFoodY, pos.x, pos.y);
+                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                lastFoodX = pos.x;
+                lastFoodY = pos.y;
+                addConsoleMessage("Еда добавлена");
+            } catch (e) {
+                console.error(`Ошибка в touchmove: ${e.message}`);
+                addConsoleMessage("Ошибка при движении касания");
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            isDrawing = false;
+        });
+
+        initSimulation();
+        gameLoop();
+    </script>
+</body>
 </html>
