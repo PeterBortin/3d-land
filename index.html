@@ -27,7 +27,7 @@
             font-size: 12px;
             line-height: 1;
             overflow: hidden;
-            text-align: center;
+            text-align: left;
             background: transparent;
             border: none;
         }
@@ -68,17 +68,17 @@
         const PARASITE_SPAWN_CHANCE = 0.2;
         const MAX_CORPSES = 100;
         const MIN_FOOD_SPACING = 2;
-        const BUBBLE_SPAWN_INTERVAL = 600;
-        const BUBBLE_MAX_RADIUS = 30;
-        const BUBBLE_GROWTH_FRAMES = 120;
-        const BACTERIUM_SPAWN_INTERVAL = 1200; // 20 seconds at 60 FPS
+        const BACTERIUM_SPAWN_INTERVAL = 600; // Every 10 seconds at 60 FPS
         const INFECTION_DURATION = 1800; // 30 seconds at 60 FPS
+        const BACTERIUM_SPEED = 0.05;
+        const BACTERIUM_SIZE_WIDTH = 2;
+        const BACTERIUM_SIZE_HEIGHT = 1.5;
+        const CANNIBALISM_THRESHOLD = 100; // Threshold for infected organisms to trigger cannibalism
 
         let organisms = [];
         let eggs = [];
         let foodParticles = [];
         let corpses = [];
-        let bubbles = [];
         let bacteria = [];
         let isDrawing = false;
         let lastFoodX = -1;
@@ -86,13 +86,15 @@
         let frameCount = 0;
         let consoleMessages = [];
         let isRunning = true;
+        let isCannibalismMode = false;
+        let infectedCount = 0;
 
         class Organism {
             constructor(x, y, energy = 50, segmentCount = 5, type = 'green') {
                 this.energy = energy;
                 this.segmentCount = segmentCount;
                 this.angle = Math.random() * 2 * Math.PI;
-                this.speed = 0.025 + (energy / MAX_ENERGY) * 0.075; // Same for green and red
+                this.speed = 0.025 + (energy / MAX_ENERGY) * 0.075;
                 this.type = type;
                 this.isDead = false;
                 this.infected = false;
@@ -108,17 +110,22 @@
             }
 
             updateColor() {
-                const t = Math.min(this.energy / MAX_ENERGY, 1);
-                if (this.type === 'red') {
-                    const r = Math.floor(85 + 170 * t); // Red: 85 to 255
-                    const g = Math.floor(85 * (1 - t)); // Green: 85 to 0
-                    const b = Math.floor(85 * (1 - t)); // Blue: 85 to 0
-                    this.color = `rgb(${r},${g},${b})`;
-                } else {
-                    const r = Math.floor(85 * (1 - t)); // Red: 85 to 0
-                    const g = Math.floor(85 + 170 * t); // Green: 85 to 255
-                    const b = Math.floor(85 * (1 - t)); // Blue: 85 to 0
-                    this.color = `rgb(${r},${g},${b})`;
+                try {
+                    const t = Math.min(this.energy / MAX_ENERGY, 1);
+                    if (this.type === 'red') {
+                        const r = Math.floor(85 + 170 * t);
+                        const g = Math.floor(85 * (1 - t));
+                        const b = Math.floor(85 * (1 - t));
+                        this.color = `rgb(${r},${g},${b})`;
+                    } else {
+                        const r = Math.floor(85 * (1 - t));
+                        const g = Math.floor(85 + 170 * t);
+                        const b = Math.floor(85 * (1 - t));
+                        this.color = `rgb(${r},${g},${b})`;
+                    }
+                } catch (e) {
+                    console.error(`Ошибка в Organism.updateColor: ${e.message}`);
+                    addConsoleMessage("Ошибка при обновлении цвета организма");
                 }
             }
 
@@ -152,75 +159,74 @@
 
                     // Intelligence
                     let target = null;
-                    let avoidBubble = null;
-                    let minBubbleDist = Infinity;
-
-                    // Check for bubbles to avoid
-                    for (let bubble of bubbles) {
-                        const d = Math.hypot(bubble.x - head.x, bubble.y - head.y);
-                        if (d < VISION_RANGE && d < minBubbleDist) {
-                            minBubbleDist = d;
-                            avoidBubble = bubble;
+                    if (isCannibalismMode) {
+                        let minDist = Infinity;
+                        for (let org of organisms) {
+                            if (!org || org === this || !org.infected) continue;
+                            const d = Math.hypot(org.segments[0].x - head.x, org.segments[0].y - head.y);
+                            if (d < VISION_RANGE && d < minDist) {
+                                minDist = d;
+                                target = org.segments[0];
+                            }
                         }
                     }
 
-                    if (avoidBubble) {
-                        this.angle = Math.atan2(head.y - avoidBubble.y, head.x - avoidBubble.x);
-                    } else {
-                        if (this.energy < 50) {
-                            let minDist = Infinity;
-                            for (let corpse of corpses) {
-                                const d = Math.hypot(corpse.x - head.x, corpse.y - head.y);
-                                if (d < VISION_RANGE && d < minDist) {
-                                    minDist = d;
-                                    target = {x: corpse.x, y: corpse.y};
-                                }
-                            }
-                        } else {
-                            let minDist = Infinity;
-                            for (let food of foodParticles) {
-                                const d = Math.hypot(food.x - head.x, food.y - head.y);
-                                if (d < VISION_RANGE && d < minDist) {
-                                    minDist = d;
-                                    target = {x: food.x, y: food.y};
-                                }
-                            }
-                            for (let bacterium of bacteria) {
-                                const d = Math.hypot(bacterium.x - head.x, bacterium.y - head.y);
-                                if (d < VISION_RANGE && d < minDist) {
-                                    minDist = d;
-                                    target = {x: bacterium.x, y: bacterium.y};
-                                }
+                    if (!target && this.energy < 50) {
+                        let minDist = Infinity;
+                        for (let corpse of corpses) {
+                            if (!corpse) continue;
+                            const d = Math.hypot(corpse.x - head.x, corpse.y - head.y);
+                            if (d < VISION_RANGE && d < minDist) {
+                                minDist = d;
+                                target = {x: corpse.x, y: corpse.y};
                             }
                         }
+                    } else if (!target) {
+                        let minDist = Infinity;
+                        for (let food of foodParticles) {
+                            if (!food) continue;
+                            const d = Math.hypot(food.x - head.x, food.y - head.y);
+                            if (d < VISION_RANGE && d < minDist) {
+                                minDist = d;
+                                target = {x: food.x, y: food.y};
+                            }
+                        }
+                        for (let bacterium of bacteria) {
+                            if (!bacterium) continue;
+                            const d = Math.hypot(bacterium.x - head.x, bacterium.y - head.y);
+                            if (d < VISION_RANGE && d < minDist) {
+                                minDist = d;
+                                target = {x: bacterium.x, y: bacterium.y};
+                            }
+                        }
+                    }
 
-                        if (this.type === 'red' && !target) {
-                            let minEnergy = Infinity;
-                            for (let org of organisms) {
-                                if (org.type === 'red' || org.energy >= this.energy) continue;
-                                const d = Math.hypot(org.segments[0].x - head.x, org.segments[0].y - head.y);
-                                if (d < VISION_RANGE && org.energy < minEnergy) {
-                                    minEnergy = org.energy;
-                                    target = org.segments[0];
-                                }
-                            }
-                        } else if (this.type === 'green' && this.energy > 75 && !target) {
-                            let minDist = Infinity;
-                            for (let org of organisms) {
-                                if (org.type !== 'red') continue;
-                                const d = Math.hypot(org.segments[0].x - head.x, org.segments[0].y - head.y);
-                                if (d < VISION_RANGE && d < minDist) {
-                                    minDist = d;
-                                    target = org.segments[0];
-                                }
+                    if (!target && this.type === 'red') {
+                        let minEnergy = Infinity;
+                        for (let org of organisms) {
+                            if (!org || org.isDead || org.type === 'red' || org.energy >= this.energy) continue;
+                            const d = Math.hypot(org.segments[0].x - head.x, org.segments[0].y - head.y);
+                            if (d < VISION_RANGE && org.energy < minEnergy) {
+                                minEnergy = org.energy;
+                                target = org.segments[0];
                             }
                         }
+                    } else if (!target && this.type === 'green' && this.energy > 75) {
+                        let minDist = Infinity;
+                        for (let org of organisms) {
+                            if (!org || org.isDead || org.type !== 'red') continue;
+                            const d = Math.hypot(org.segments[0].x - head.x, org.segments[0].y - head.y);
+                            if (d < VISION_RANGE && d < minDist) {
+                                minDist = d;
+                                target = org.segments[0];
+                            }
+                        }
+                    }
 
-                        if (target) {
-                            this.angle = Math.atan2(target.y - head.y, target.x - head.x);
-                        } else if (Math.random() < 0.05) {
-                            this.angle += (Math.random() - 0.5) * Math.PI / 2;
-                        }
+                    if (target) {
+                        this.angle = Math.atan2(target.y - head.y, target.x - head.x);
+                    } else if (Math.random() < 0.05) {
+                        this.angle += (Math.random() - 0.5) * Math.PI / 2;
                     }
 
                     // Move head
@@ -238,15 +244,22 @@
                         const dx = prev.x - curr.x;
                         const dy = prev.y - curr.y;
                         const dist = Math.hypot(dx, dy);
-                        if (dist > 1) {
-                            curr.x += (dx / dist) * (dist - 1);
-                            curr.y += (dy / dist) * (dist - 1);
+                        if (dist > 1.5) {
+                            curr.x += (dx / dist) * (dist - 1.5);
+                            curr.y += (dy / dist) * (dist - 1.5);
                         }
                     }
 
                     // Lose energy
                     this.energy -= ENERGY_LOSS_PER_FRAME;
-                    this.energy = Math.max(1, this.energy);
+                    if (this.energy <= 0) {
+                        this.isDead = true;
+                        if (corpses.length < MAX_CORPSES) {
+                            corpses.push(new Corpse(head.x, head.y, CORPSE_ENERGY_GAIN));
+                        }
+                        addConsoleMessage(`${this.type === 'red' ? 'Красный' : 'Зеленый'} организм умер от истощения`);
+                        return false;
+                    }
 
                     // Adjust segments
                     const idealSegments = Math.max(2, Math.floor(this.energy / 15) + 2);
@@ -290,7 +303,11 @@
                     if (this.energy - childEnergy < 10) return;
                     this.energy -= childEnergy;
                     const head = this.segments[0];
-                    eggs.push(new Egg(head.x + (Math.random() - 0.5) * 5, head.y + (Math.random() - 0.5) * 5, childEnergy, this.type));
+                    const egg = new Egg(head.x + (Math.random() - 0.5) * 5, head.y + (Math.random() - 0.5) * 5, childEnergy, this.type);
+                    if (this.infected) {
+                        egg.infected = true;
+                    }
+                    eggs.push(egg);
                     addConsoleMessage("Яйцо отложено");
                 } catch (e) {
                     console.error(`Ошибка в layEgg: ${e.message}`);
@@ -371,7 +388,7 @@
             eatOrganism(other) {
                 try {
                     this.energy = Math.min(MAX_ENERGY, this.energy + (this.type === 'red' ? PARASITE_ENERGY_GAIN : PREDATION_ENERGY_GAIN));
-                    if (other.infected) {
+                    if (other.infected && !isCannibalismMode) {
                         this.infected = true;
                         this.infectionTimer = INFECTION_DURATION;
                         addConsoleMessage(`${this.type === 'red' ? 'Красный' : 'Зеленый'} организм заражен от другого`);
@@ -401,7 +418,6 @@
             draw() {
                 try {
                     const pulse = Math.sin(Date.now() / 150) * 0.5 + 1.5;
-                    // Blinking for infected organisms
                     ctx.strokeStyle = this.infected && (frameCount % 30 < 15) ? '#f0f' : this.color;
                     ctx.fillStyle = this.infected && (frameCount % 30 < 15) ? '#f0f' : this.color;
                     ctx.beginPath();
@@ -428,13 +444,19 @@
                 this.energy = energy;
                 this.type = type;
                 this.age = 0;
+                this.infected = false;
             }
 
             update() {
                 try {
                     this.age++;
                     if (this.age >= EGG_HATCH_FRAMES) {
-                        organisms.push(new Organism(this.x, this.y, this.energy, 5, this.type));
+                        const newOrg = new Organism(this.x, this.y, this.energy, 5, this.type);
+                        if (this.infected) {
+                            newOrg.infected = true;
+                            newOrg.infectionTimer = INFECTION_DURATION;
+                        }
+                        organisms.push(newOrg);
                         addConsoleMessage(this.type === 'red' ? "Красный организм вылупился" : "Зеленый организм вылупился");
                         return false;
                     }
@@ -448,7 +470,7 @@
 
             draw() {
                 try {
-                    ctx.fillStyle = this.type === 'red' ? '#800' : '#555';
+                    ctx.fillStyle = this.infected ? '#a0a' : this.type === 'red' ? '#800' : '#555';
                     ctx.beginPath();
                     ctx.arc(this.x, this.y, 1.5, 0, 2 * Math.PI);
                     ctx.fill();
@@ -498,21 +520,47 @@
             constructor(x, y) {
                 this.x = x;
                 this.y = y;
+                this.angle = Math.random() * 2 * Math.PI;
+                this.speed = BACTERIUM_SPEED;
+            }
+
+            update() {
+                try {
+                    this.x += Math.cos(this.angle) * this.speed;
+                    this.y += Math.sin(this.angle) * this.speed;
+
+                    // Clamp boundaries
+                    this.x = Math.max(0, Math.min(WIDTH, this.x));
+                    this.y = Math.max(0, Math.min(HEIGHT, this.y));
+
+                    // Random curve change
+                    if (Math.random() < 0.05) {
+                        this.angle += (Math.random() - 0.5) * Math.PI / 2;
+                    }
+
+                    return true;
+                } catch (e) {
+                    console.error(`Ошибка в Bacterium.update: ${e.message}`);
+                    addConsoleMessage("Ошибка в обновлении бактерии");
+                    return false;
+                }
             }
 
             draw() {
                 try {
+                    const pulse = Math.sin(Date.now() / 200) * 0.2 + 1;
+                    const noiseOffset = Math.sin(Date.now() / 100 + this.x + this.y) * 0.2;
                     ctx.fillStyle = '#00f';
                     ctx.beginPath();
-                    ctx.ellipse(this.x, this.y, 1.5, 1, 0, 0, 2 * Math.PI);
+                    ctx.ellipse(this.x + noiseOffset, this.y + noiseOffset, BACTERIUM_SIZE_WIDTH * pulse, BACTERIUM_SIZE_HEIGHT * pulse, 0, 0, 2 * Math.PI);
                     ctx.fill();
                     ctx.strokeStyle = '#00f';
                     ctx.lineWidth = 0.5;
                     for (let i = 0; i < 4; i++) {
                         const angle = (i / 4) * 2 * Math.PI;
                         ctx.beginPath();
-                        ctx.moveTo(this.x + Math.cos(angle) * 1.5, this.y + Math.sin(angle) * 1.5);
-                        ctx.lineTo(this.x + Math.cos(angle) * 2.5, this.y + Math.sin(angle) * 2.5);
+                        ctx.moveTo(this.x + Math.cos(angle) * BACTERIUM_SIZE_WIDTH * pulse, this.y + Math.sin(angle) * BACTERIUM_SIZE_HEIGHT * pulse);
+                        ctx.lineTo(this.x + Math.cos(angle) * (BACTERIUM_SIZE_WIDTH * pulse + 1), this.y + Math.sin(angle) * (BACTERIUM_SIZE_HEIGHT * pulse + 1));
                         ctx.stroke();
                     }
                 } catch (e) {
@@ -522,66 +570,11 @@
             }
         }
 
-        class Bubble {
-            constructor(x, y) {
-                this.x = x;
-                this.y = y;
-                this.radius = 0;
-                this.age = 0;
-            }
-
-            update() {
-                try {
-                    this.age++;
-                    this.radius = (this.age / BUBBLE_GROWTH_FRAMES) * BUBBLE_MAX_RADIUS;
-                    if (this.age >= BUBBLE_GROWTH_FRAMES) {
-                        organisms = organisms.filter(org => {
-                            try {
-                                const dist = Math.hypot(org.segments[0].x - this.x, org.segments[0].y - this.y);
-                                if (dist < BUBBLE_MAX_RADIUS) {
-                                    if (corpses.length < MAX_CORPSES) {
-                                        corpses.push(new Corpse(org.segments[0].x, org.segments[0].y, CORPSE_ENERGY_GAIN));
-                                    }
-                                    addConsoleMessage(`${org.type === 'red' ? 'Красный' : 'Зеленый'} организм убит пузырем`);
-                                    return false;
-                                }
-                                return true;
-                            } catch (e) {
-                                console.error(`Ошибка в фильтрации organisms в Bubble.update: ${e.message}`);
-                                addConsoleMessage("Ошибка при фильтрации организмов");
-                                return false;
-                            }
-                        });
-                        return false;
-                    }
-                    return true;
-                } catch (e) {
-                    console.error(`Ошибка в Bubble.update: ${e.message}`);
-                    addConsoleMessage("Ошибка в обновлении пузыря");
-                    return false;
-                }
-            }
-
-            draw() {
-                try {
-                    ctx.beginPath();
-                    ctx.arc(this.x, this.y, this.radius, 0, 2 * Math.PI);
-                    ctx.strokeStyle = '#f00';
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
-                } catch (e) {
-                    console.error(`Ошибка в Bubble.draw: ${e.message}`);
-                    addConsoleMessage("Ошибка при отрисовке пузыря");
-                }
-            }
-        }
-
         function addConsoleMessage(message) {
             try {
                 const now = new Date();
-                const mmss = `${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
-                const blockNumber = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
-                consoleMessages.push(`${mmss} | ${message} | Блок ${blockNumber}`);
+                const hhmmss = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+                consoleMessages.push(`${hhmmss} | ${message}`);
                 if (consoleMessages.length > 3) {
                     consoleMessages.shift();
                 }
@@ -597,7 +590,6 @@
                 eggs = [];
                 foodParticles = [];
                 corpses = [];
-                bubbles = [];
                 bacteria = [];
                 organisms.push(new Organism(Math.random() * WIDTH, Math.random() * HEIGHT, 50, 5, 'green'));
                 addConsoleMessage("Симуляция начата");
@@ -637,7 +629,18 @@
                             org.eatBacterium(j);
                         }
                     }
-                    if (org.type === 'green' && org.energy > 75) {
+                    if (isCannibalismMode) {
+                        for (let j = organisms.length - 1; j >= 0; j--) {
+                            if (!organisms[j] || organisms[j].isDead || !organisms[j].infected || organisms[j] === org) continue;
+                            const other = organisms[j];
+                            const otherHead = other.segments[0];
+                            const dist = Math.hypot(head.x - otherHead.x, head.y - otherHead.y);
+                            if (dist < COLLISION_DIST) {
+                                org.eatOrganism(other);
+                                organisms.splice(j, 1);
+                            }
+                        }
+                    } else if (org.type === 'green' && org.energy > 75) {
                         for (let j = organisms.length - 1; j >= 0; j--) {
                             if (!organisms[j] || organisms[j].isDead || organisms[j].type !== 'red') continue;
                             const other = organisms[j];
@@ -670,11 +673,20 @@
         function updateSimulation() {
             try {
                 frameCount++;
-                if (frameCount % BUBBLE_SPAWN_INTERVAL === 0) {
-                    bubbles.push(new Bubble(Math.random() * WIDTH, Math.random() * HEIGHT));
-                    addConsoleMessage("Пузырь появился");
+                // Count infected organisms
+                infectedCount = organisms.filter(org => org && org.infected).length;
+
+                // Toggle cannibalism mode
+                if (infectedCount >= CANNIBALISM_THRESHOLD && !isCannibalismMode) {
+                    isCannibalismMode = true;
+                    addConsoleMessage("Режим каннибализма активирован");
+                } else if (infectedCount === 0 && isCannibalismMode) {
+                    isCannibalismMode = false;
+                    addConsoleMessage("Режим каннибализма завершен");
                 }
-                if (frameCount % BACTERIUM_SPAWN_INTERVAL === 0) {
+
+                // Spawn bacteria only if not in cannibalism mode
+                if (!isCannibalismMode && frameCount % BACTERIUM_SPAWN_INTERVAL === 0) {
                     bacteria.push(new Bacterium(Math.random() * WIDTH, Math.random() * HEIGHT));
                     addConsoleMessage("Бактерия появилась");
                 }
@@ -699,17 +711,15 @@
                     }
                 });
 
-                bubbles = bubbles.filter(bubble => {
+                bacteria = bacteria.filter(bacterium => {
                     try {
-                        return bubble && bubble.update();
+                        return bacterium && bacterium.update();
                     } catch (e) {
-                        console.error(`Ошибка при фильтрации bubbles: ${e.message}`);
-                        addConsoleMessage("Ошибка при фильтрации пузырей");
+                        console.error(`Ошибка при фильтрации bacteria: ${e.message}`);
+                        addConsoleMessage("Ошибка при фильтрации бактерий");
                         return false;
                     }
                 });
-
-                bacteria = bacteria.filter(bacterium => bacterium);
 
                 checkCollisions();
             } catch (e) {
@@ -727,7 +737,6 @@
                 eggs.forEach(egg => egg && egg.draw());
                 organisms.forEach(org => org && !org.isDead && org.draw());
                 bacteria.forEach(bacterium => bacterium && bacterium.draw());
-                bubbles.forEach(bubble => bubble && bubble.draw());
             } catch (e) {
                 console.error(`Ошибка в drawSimulation: ${e.message}`);
                 addConsoleMessage("Ошибка при отрисовке симуляции");
@@ -755,11 +764,15 @@
         function getPosition(event) {
             try {
                 const rect = canvas.getBoundingClientRect();
-                let clientX = event.clientX;
-                let clientY = event.clientY;
-                if (event.touches && event.touches.length > 0) {
+                let clientX, clientY;
+                if (event && event.touches && event.touches.length > 0) {
                     clientX = event.touches[0].clientX;
                     clientY = event.touches[0].clientY;
+                } else if (event && event.clientX !== undefined) {
+                    clientX = event.clientX;
+                    clientY = event.clientY;
+                } else {
+                    throw new Error("Некорректное событие");
                 }
                 const x = (clientX - rect.left) / rect.width * WIDTH;
                 const y = (clientY - rect.top) / rect.height * HEIGHT;
