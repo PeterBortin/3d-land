@@ -31,6 +31,56 @@
             background: transparent;
             border: none;
         }
+        #modeToggle {
+            position: absolute;
+            top: 50px;
+            width: 90%;
+            padding: 2px;
+            font-size: 12px;
+            text-align: left;
+            display: flex;
+            align-items: center;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 20px;
+            margin-right: 10px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: 0.4s;
+            border-radius: 20px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: 0.4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #0f0;
+        }
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
         canvas {
             width: 90vw;
             height: 80vh;
@@ -43,11 +93,20 @@
 </head>
 <body>
     <div id="console"></div>
+    <div id="modeToggle">
+        <label class="switch">
+            <input type="checkbox" id="toggle">
+            <span class="slider"></span>
+        </label>
+        <span id="modeLabel">Пища для организмов</span>
+    </div>
     <canvas id="simulationCanvas" width="100" height="150"></canvas>
     <script>
         const canvas = document.getElementById('simulationCanvas');
         const ctx = canvas.getContext('2d');
         const consoleDiv = document.getElementById('console');
+        const toggle = document.getElementById('toggle');
+        const modeLabel = document.getElementById('modeLabel');
 
         // Simulation parameters
         const WIDTH = canvas.width;
@@ -80,6 +139,7 @@
         let foodParticles = [];
         let corpses = [];
         let bacteria = [];
+        let barriers = [];
         let isDrawing = false;
         let lastFoodX = -1;
         let lastFoodY = -1;
@@ -88,6 +148,19 @@
         let isRunning = true;
         let isCannibalismMode = false;
         let infectedCount = 0;
+        let drawMode = 'food';
+
+        toggle.addEventListener('change', () => {
+            drawMode = toggle.checked ? 'barrier' : 'food';
+            modeLabel.textContent = toggle.checked ? 'Заграждения' : 'Пища для организмов';
+        });
+
+        function shortestAngleDiff(from, to) {
+            let diff = (to - from) % (2 * Math.PI);
+            if (diff > Math.PI) diff -= 2 * Math.PI;
+            if (diff < -Math.PI) diff += 2 * Math.PI;
+            return diff;
+        }
 
         class Organism {
             constructor(x, y, energy = 50, segmentCount = 5, type = 'green') {
@@ -150,11 +223,19 @@
                     }
 
                     // Avoid walls
-                    const futureX = head.x + Math.cos(this.angle) * this.speed * 10;
-                    const futureY = head.y + Math.sin(this.angle) * this.speed * 10;
+                    let futureX = head.x + Math.cos(this.angle) * this.speed * 10;
+                    let futureY = head.y + Math.sin(this.angle) * this.speed * 10;
                     if (futureX < WALL_AVOID_DIST || futureX > WIDTH - WALL_AVOID_DIST ||
                         futureY < WALL_AVOID_DIST || futureY > HEIGHT - WALL_AVOID_DIST) {
                         this.angle += (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2;
+                    }
+
+                    // Avoid barriers
+                    for (let bar of barriers) {
+                        const d = Math.hypot(futureX - bar.x, futureY - bar.y);
+                        if (d < WALL_AVOID_DIST) {
+                            this.angle += (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2;
+                        }
                     }
 
                     // Intelligence
@@ -224,14 +305,31 @@
                     }
 
                     if (target) {
-                        this.angle = Math.atan2(target.y - head.y, target.x - head.x);
+                        const targetAngle = Math.atan2(target.y - head.y, target.x - head.x);
+                        this.angle += shortestAngleDiff(this.angle, targetAngle) * 0.2;
                     } else if (Math.random() < 0.05) {
-                        this.angle += (Math.random() - 0.5) * Math.PI / 2;
+                        const randomTurn = (Math.random() - 0.5) * Math.PI / 2;
+                        this.angle += shortestAngleDiff(this.angle, this.angle + randomTurn) * 0.2;
                     }
 
-                    // Move head
-                    head.x += Math.cos(this.angle) * this.speed;
-                    head.y += Math.sin(this.angle) * this.speed;
+                    // Move head with barrier check
+                    const dx = Math.cos(this.angle) * this.speed;
+                    const dy = Math.sin(this.angle) * this.speed;
+                    let newX = head.x + dx;
+                    let newY = head.y + dy;
+                    let colliding = false;
+                    for (let bar of barriers) {
+                        if (Math.hypot(newX - bar.x, newY - bar.y) < COLLISION_DIST) {
+                            colliding = true;
+                            break;
+                        }
+                    }
+                    if (!colliding) {
+                        head.x = newX;
+                        head.y = newY;
+                    } else {
+                        this.angle += Math.PI + (Math.random() - 0.5) * Math.PI / 4;
+                    }
 
                     // Clamp boundaries
                     head.x = Math.max(0, Math.min(WIDTH, head.x));
@@ -498,6 +596,23 @@
             }
         }
 
+        class Barrier {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+
+            draw() {
+                try {
+                    ctx.fillStyle = '#888';
+                    ctx.fillRect(Math.floor(this.x), Math.floor(this.y), 1, 1);
+                } catch (e) {
+                    console.error(`Ошибка в Barrier.draw: ${e.message}`);
+                    addConsoleMessage("Ошибка при отрисовке заграждения");
+                }
+            }
+        }
+
         class Corpse {
             constructor(x, y, energy) {
                 this.x = x;
@@ -526,8 +641,40 @@
 
             update() {
                 try {
-                    this.x += Math.cos(this.angle) * this.speed;
-                    this.y += Math.sin(this.angle) * this.speed;
+                    // Avoid walls
+                    let futureX = this.x + Math.cos(this.angle) * this.speed * 10;
+                    let futureY = this.y + Math.sin(this.angle) * this.speed * 10;
+                    if (futureX < WALL_AVOID_DIST || futureX > WIDTH - WALL_AVOID_DIST ||
+                        futureY < WALL_AVOID_DIST || futureY > HEIGHT - WALL_AVOID_DIST) {
+                        this.angle += (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2;
+                    }
+
+                    // Avoid barriers
+                    for (let bar of barriers) {
+                        const d = Math.hypot(futureX - bar.x, futureY - bar.y);
+                        if (d < WALL_AVOID_DIST) {
+                            this.angle += (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2;
+                        }
+                    }
+
+                    // Move with barrier check
+                    const dx = Math.cos(this.angle) * this.speed;
+                    const dy = Math.sin(this.angle) * this.speed;
+                    let newX = this.x + dx;
+                    let newY = this.y + dy;
+                    let colliding = false;
+                    for (let bar of barriers) {
+                        if (Math.hypot(newX - bar.x, newY - bar.y) < COLLISION_DIST) {
+                            colliding = true;
+                            break;
+                        }
+                    }
+                    if (!colliding) {
+                        this.x = newX;
+                        this.y = newY;
+                    } else {
+                        this.angle += Math.PI + (Math.random() - 0.5) * Math.PI / 4;
+                    }
 
                     // Clamp boundaries
                     this.x = Math.max(0, Math.min(WIDTH, this.x));
@@ -591,6 +738,7 @@
                 foodParticles = [];
                 corpses = [];
                 bacteria = [];
+                barriers = [];
                 organisms.push(new Organism(Math.random() * WIDTH, Math.random() * HEIGHT, 50, 5, 'green'));
                 addConsoleMessage("Симуляция начата");
             } catch (e) {
@@ -733,6 +881,7 @@
             try {
                 ctx.clearRect(0, 0, WIDTH, HEIGHT);
                 foodParticles.forEach(food => food && food.draw());
+                barriers.forEach(barrier => barrier && barrier.draw());
                 corpses.forEach(corpse => corpse && corpse.draw());
                 eggs.forEach(egg => egg && egg.draw());
                 organisms.forEach(org => org && !org.isDead && org.draw());
@@ -784,7 +933,22 @@
             }
         }
 
-        function addFoodLine(x1, y1, x2, y2) {
+        function addParticle(x, y) {
+            try {
+                if (drawMode === 'food') {
+                    foodParticles.push(new FoodParticle(x, y));
+                    addConsoleMessage("Еда добавлена");
+                } else {
+                    barriers.push(new Barrier(x, y));
+                    addConsoleMessage("Заграждение добавлено");
+                }
+            } catch (e) {
+                console.error(`Ошибка в addParticle: ${e.message}`);
+                addConsoleMessage("Ошибка при добавлении частицы");
+            }
+        }
+
+        function addLine(x1, y1, x2, y2) {
             try {
                 const dist = Math.hypot(x2 - x1, y2 - y1);
                 if (dist < MIN_FOOD_SPACING) return;
@@ -793,11 +957,11 @@
                     const frac = i / steps;
                     const px = x1 + (x2 - x1) * frac;
                     const py = y1 + (y2 - y1) * frac;
-                    foodParticles.push(new FoodParticle(px, py));
+                    addParticle(px, py);
                 }
             } catch (e) {
-                console.error(`Ошибка в addFoodLine: ${e.message}`);
-                addConsoleMessage("Ошибка при добавлении линии еды");
+                console.error(`Ошибка в addLine: ${e.message}`);
+                addConsoleMessage("Ошибка при добавлении линии");
             }
         }
 
@@ -806,13 +970,12 @@
             try {
                 isDrawing = true;
                 const pos = getPosition(e);
-                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                addParticle(pos.x, pos.y);
                 lastFoodX = pos.x;
                 lastFoodY = pos.y;
-                addConsoleMessage("Еда добавлена");
             } catch (e) {
                 console.error(`Ошибка в mousedown: ${e.message}`);
-                addConsoleMessage("Ошибка при добавлении еды");
+                addConsoleMessage("Ошибка при добавлении");
             }
         });
 
@@ -822,11 +985,10 @@
                 const pos = getPosition(e);
                 const dist = Math.hypot(pos.x - lastFoodX, pos.y - lastFoodY);
                 if (dist < MIN_FOOD_SPACING) return;
-                addFoodLine(lastFoodX, lastFoodY, pos.x, pos.y);
-                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                addLine(lastFoodX, lastFoodY, pos.x, pos.y);
+                addParticle(pos.x, pos.y);
                 lastFoodX = pos.x;
                 lastFoodY = pos.y;
-                addConsoleMessage("Еда добавлена");
             } catch (e) {
                 console.error(`Ошибка в mousemove: ${e.message}`);
                 addConsoleMessage("Ошибка при движении мыши");
@@ -847,10 +1009,9 @@
                 e.preventDefault();
                 isDrawing = true;
                 const pos = getPosition(e);
-                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                addParticle(pos.x, pos.y);
                 lastFoodX = pos.x;
                 lastFoodY = pos.y;
-                addConsoleMessage("Еда добавлена");
             } catch (e) {
                 console.error(`Ошибка в touchstart: ${e.message}`);
                 addConsoleMessage("Ошибка при касании");
@@ -864,11 +1025,10 @@
                 const pos = getPosition(e);
                 const dist = Math.hypot(pos.x - lastFoodX, pos.y - lastFoodY);
                 if (dist < MIN_FOOD_SPACING) return;
-                addFoodLine(lastFoodX, lastFoodY, pos.x, pos.y);
-                foodParticles.push(new FoodParticle(pos.x, pos.y));
+                addLine(lastFoodX, lastFoodY, pos.x, pos.y);
+                addParticle(pos.x, pos.y);
                 lastFoodX = pos.x;
                 lastFoodY = pos.y;
-                addConsoleMessage("Еда добавлена");
             } catch (e) {
                 console.error(`Ошибка в touchmove: ${e.message}`);
                 addConsoleMessage("Ошибка при движении касания");
